@@ -1,27 +1,22 @@
 import { readFileSync, writeFileSync, readdirSync, mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
+import { randomUUID } from 'crypto';
 import { XMLParser, XMLBuilder } from 'fast-xml-parser';
 
 function stripRtf(rtf) {
-  // Remove RTF header/groups and control words, leaving plain text
-  let text = rtf
-    .replace(/\{\\[^{}]*\}/g, '')          // remove nested groups like {\fonttbl...}
-    .replace(/\\par\b\*?/g, '\n')           // paragraph breaks → newlines
+  return rtf
+    .replace(/\{\\[^{}]*\}/g, '')
+    .replace(/\\par\b\*?/g, '\n')
     .replace(/\\line\b\*?/g, '\n')
     .replace(/\\tab\b/g, '\t')
     .replace(/\\\n/g, '\n')
-    .replace(/\\u(\d+)\??/g, (_, code) =>  // unicode escapes
-      String.fromCharCode(parseInt(code, 10))
-    )
-    .replace(/\\'([0-9a-fA-F]{2})/g, (_, hex) => // hex char escapes
-      String.fromCharCode(parseInt(hex, 16))
-    )
-    .replace(/\\[a-z*]+\d*\b\*?/g, '')     // remaining control words
-    .replace(/[{}\\]/g, '')                 // remaining braces and backslashes
+    .replace(/\\u(\d+)\??/g, (_, code) => String.fromCharCode(parseInt(code, 10)))
+    .replace(/\\'([0-9a-fA-F]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/\\[a-z*]+\d*\b\*?/g, '')
+    .replace(/[{}\\]/g, '')
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
-  return text;
 }
 
 const PARSER_OPTIONS = {
@@ -29,6 +24,27 @@ const PARSER_OPTIONS = {
   attributeNamePrefix: '@_',
   isArray: (name) => ['BinderItem', 'Label', 'Status'].includes(name),
 };
+
+const BUILDER_OPTIONS = {
+  ignoreAttributes: false,
+  attributeNamePrefix: '@_',
+  format: true,
+  indentBy: '   ',
+  suppressEmptyNode: false,
+};
+
+const LABEL_COLORS_NAMED = {
+  red:    '0.698 0.132 0.132',
+  orange: '0.698 0.412 0.132',
+  yellow: '0.698 0.698 0.132',
+  green:  '0.132 0.557 0.132',
+  blue:   '0.132 0.412 0.698',
+  purple: '0.412 0.132 0.698',
+  pink:   '0.698 0.132 0.412',
+  cyan:   '0.132 0.698 0.698',
+};
+
+const LABEL_COLORS = Object.values(LABEL_COLORS_NAMED);
 
 export class ScrivenerProject {
   constructor(scrivPath) {
@@ -46,19 +62,16 @@ export class ScrivenerProject {
 
   _load() {
     const xml = readFileSync(this.scrivxPath, 'utf8');
-    const parser = new XMLParser(PARSER_OPTIONS);
-    this._doc = parser.parse(xml);
+    this._doc = new XMLParser(PARSER_OPTIONS).parse(xml);
+  }
+
+  reload() {
+    this._load();
   }
 
   _save() {
-    const builder = new XMLBuilder({
-      ignoreAttributes: false,
-      attributeNamePrefix: '@_',
-      format: true,
-      indentBy: '   ',
-      suppressEmptyNode: false,
-    });
-    const xml = '<?xml version="1.0" encoding="UTF-8"?>\n' + builder.build(this._doc);
+    const xml = '<?xml version="1.0" encoding="UTF-8"?>\n' +
+      new XMLBuilder(BUILDER_OPTIONS).build(this._doc);
     writeFileSync(this.scrivxPath, xml, 'utf8');
   }
 
@@ -81,21 +94,15 @@ export class ScrivenerProject {
       created: meta.Created ?? '',
       modified: meta.Modified ?? '',
     };
-
     const results = [node];
-    const children = item.Children?.BinderItem ?? [];
-    for (const child of children) {
+    for (const child of item.Children?.BinderItem ?? []) {
       results.push(...this._flattenItem(child, depth + 1));
     }
     return results;
   }
 
   flattenBinder() {
-    const flat = [];
-    for (const item of this._getBinderItems()) {
-      flat.push(...this._flattenItem(item, 0));
-    }
-    return flat;
+    return this._getBinderItems().flatMap((item) => this._flattenItem(item, 0));
   }
 
   getLabels() {
@@ -115,11 +122,8 @@ export class ScrivenerProject {
   _findItemInTree(items, uuid) {
     for (const item of items) {
       if ((item['@_UUID'] ?? '') === uuid) return item;
-      const children = item.Children?.BinderItem ?? [];
-      if (children.length) {
-        const found = this._findItemInTree(children, uuid);
-        if (found) return found;
-      }
+      const found = this._findItemInTree(item.Children?.BinderItem ?? [], uuid);
+      if (found) return found;
     }
     return null;
   }
@@ -131,8 +135,7 @@ export class ScrivenerProject {
   readContent(uuid) {
     const rtfPath = join(this.scrivPath, 'Files', 'Data', uuid, 'content.rtf');
     try {
-      const rtf = readFileSync(rtfPath, 'utf8');
-      return stripRtf(rtf);
+      return stripRtf(readFileSync(rtfPath, 'utf8'));
     } catch {
       return '';
     }
@@ -140,8 +143,6 @@ export class ScrivenerProject {
 
   writeContent(uuid, plainText) {
     const dir = join(this.scrivPath, 'Files', 'Data', uuid);
-    const rtfPath = join(dir, 'content.rtf');
-
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 
     const escaped = plainText
@@ -161,13 +162,12 @@ export class ScrivenerProject {
       '}',
     ].join('\n');
 
-    writeFileSync(rtfPath, rtf, 'utf8');
+    writeFileSync(join(dir, 'content.rtf'), rtf, 'utf8');
   }
 
   updateMetadata(uuid, changes) {
     const item = this.findItem(uuid);
     if (!item) throw new Error(`Item not found: ${uuid}`);
-
     if (!item.MetaData) item.MetaData = {};
 
     if ('title' in changes) item.Title = changes.title;
@@ -177,7 +177,128 @@ export class ScrivenerProject {
     if ('includeInCompile' in changes) {
       item.MetaData.IncludeInCompile = changes.includeInCompile ? 'Yes' : 'No';
     }
-
     this._save();
+  }
+
+  // ── Static factory ──────────────────────────────────────────────────────────
+
+  static create(projectsDir, name, options = {}) {
+    const {
+      labels = [],
+      statuses = ['To Do', 'In Progress', 'First Draft', 'Revised Draft', 'Done'],
+      manuscript = [],
+      research = [],
+    } = options;
+
+    const safeName = name.replace(/[/\\:*?"<>|]/g, '-').trim();
+    const packageName = safeName.endsWith('.scriv') ? safeName : `${safeName}.scriv`;
+    const scrivPath = join(projectsDir, packageName);
+
+    if (existsSync(scrivPath)) throw new Error(`Project already exists: ${packageName}`);
+
+    mkdirSync(join(scrivPath, 'Files', 'Data'), { recursive: true });
+
+    const now = new Date().toISOString().replace('T', ' ').slice(0, 19);
+    let nextId = 1;
+    const pendingContent = [];
+
+    const labelMap = Object.fromEntries(
+      labels.map((l, i) => [typeof l === 'string' ? l : l.name, String(i + 1)])
+    );
+    const statusMap = Object.fromEntries(statuses.map((s, i) => [s, String(i + 1)]));
+
+    function buildItem(item) {
+      const uuid = randomUUID().toUpperCase();
+      const node = {
+        '@_UUID': uuid,
+        '@_ID': String(nextId++),
+        '@_Type': item.type ?? 'Text',
+        Title: item.title ?? 'Untitled',
+      };
+
+      if (item.synopsis) node.Synopsis = item.synopsis;
+
+      const meta = {
+        IncludeInCompile: item.includeInCompile === false ? 'No' : 'Yes',
+        Created: now,
+        Modified: now,
+      };
+      if (item.label && labelMap[item.label] !== undefined) meta.LabelID = labelMap[item.label];
+      if (item.status && statusMap[item.status] !== undefined) meta.StatusID = statusMap[item.status];
+      node.MetaData = meta;
+
+      const children = item.children ?? [];
+      if (children.length > 0) node.Children = { BinderItem: children.map(buildItem) };
+
+      if (item.content) pendingContent.push({ uuid, content: item.content });
+
+      return node;
+    }
+
+    const manuscriptNodes = manuscript.map(buildItem);
+    const researchNodes = research.map(buildItem);
+
+    const binderItems = [
+      {
+        '@_UUID': randomUUID().toUpperCase(),
+        '@_ID': String(nextId++),
+        '@_Type': 'DraftFolder',
+        Title: 'Manuscript',
+        MetaData: { IncludeInCompile: 'Yes', Created: now, Modified: now },
+        Children: manuscriptNodes.length > 0 ? { BinderItem: manuscriptNodes } : {},
+      },
+      {
+        '@_UUID': randomUUID().toUpperCase(),
+        '@_ID': String(nextId++),
+        '@_Type': 'ResearchFolder',
+        Title: 'Research',
+        MetaData: { IncludeInCompile: 'No', Created: now, Modified: now },
+        Children: researchNodes.length > 0 ? { BinderItem: researchNodes } : {},
+      },
+      {
+        '@_UUID': randomUUID().toUpperCase(),
+        '@_ID': String(nextId++),
+        '@_Type': 'TrashFolder',
+        Title: 'Trash',
+        MetaData: { IncludeInCompile: 'No', Created: now, Modified: now },
+        Children: {},
+      },
+    ];
+
+    const labelNodes = [
+      { '@_ID': '0', '#text': 'No Label' },
+      ...labels.map((l, i) => {
+        const labelName = typeof l === 'string' ? l : l.name;
+        const colorKey = typeof l === 'object' ? l.color : undefined;
+        const color = (colorKey && LABEL_COLORS_NAMED[colorKey]) ?? LABEL_COLORS[i % LABEL_COLORS.length];
+        return { '@_ID': String(i + 1), '@_Color': color, '#text': labelName };
+      }),
+    ];
+
+    const statusNodes = [
+      { '@_ID': '0', '#text': 'No Status' },
+      ...statuses.map((s, i) => ({ '@_ID': String(i + 1), '#text': s })),
+    ];
+
+    const doc = {
+      ScrivenerProject: {
+        '@_Version': '2.0',
+        '@_Creator': 'scrivener3',
+        '@_Modified': now,
+        Binder: { BinderItem: binderItems },
+        LabelSettings: { Labels: { Label: labelNodes } },
+        StatusSettings: { Statuses: { Status: statusNodes } },
+      },
+    };
+
+    const xml = '<?xml version="1.0" encoding="UTF-8"?>\n' +
+      new XMLBuilder(BUILDER_OPTIONS).build(doc);
+    writeFileSync(join(scrivPath, `${safeName}.scrivx`), xml, 'utf8');
+
+    const project = new ScrivenerProject(scrivPath);
+    for (const { uuid, content } of pendingContent) {
+      project.writeContent(uuid, content);
+    }
+    return project;
   }
 }
