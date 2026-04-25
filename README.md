@@ -1,13 +1,13 @@
 # scrivener-mcp
 
-A local MCP server that exposes your Scrivener project to Claude (or any MCP-compatible client). It lets you list, read, write, and search documents directly inside a `.scriv` package without opening Scrivener.
+A local MCP server that exposes your Scrivener projects to Claude (or any MCP-compatible client). Create new projects from scratch, navigate the binder, read and write document content, and update metadata — all without opening Scrivener.
 
 ---
 
 ## Requirements
 
 - Node.js 18 or later
-- A Scrivener 3 project (`.scriv` package on macOS)
+- Scrivener 3 on macOS (`.scriv` packages)
 
 ---
 
@@ -20,9 +20,24 @@ npm install
 
 ---
 
+## Environment variables
+
+| Variable | Description |
+|---|---|
+| `SCRIV_DIR` | Path to a directory containing `.scriv` packages. Enables `list_projects`, `open_project`, and `create_project`. |
+| `SCRIV_PATH` | Path to a single `.scriv` package. Opens it immediately on startup. |
+
+At least one must be set. Both can be set simultaneously.
+
+---
+
 ## Running manually
 
 ```bash
+# Multi-project mode (recommended)
+SCRIV_DIR="/path/to/ScrivenerProjects" npm start
+
+# Single-project mode
 SCRIV_PATH="/path/to/MyProject.scriv" npm start
 ```
 
@@ -30,7 +45,7 @@ SCRIV_PATH="/path/to/MyProject.scriv" npm start
 
 ## Configuring Claude Desktop
 
-Add the following to your `claude_desktop_config.json` (usually at `~/Library/Application Support/Claude/claude_desktop_config.json`):
+Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ```json
 {
@@ -39,32 +54,126 @@ Add the following to your `claude_desktop_config.json` (usually at `~/Library/Ap
       "command": "node",
       "args": ["/absolute/path/to/scrivener-mcp/src/index.js"],
       "env": {
-        "SCRIV_PATH": "/absolute/path/to/MyProject.scriv"
+        "SCRIV_DIR": "/Users/you/Writing/ScrivenerProjects"
       }
     }
   }
 }
 ```
 
-Replace both paths with the actual absolute paths on your system. Restart Claude Desktop after saving.
+Restart Claude Desktop after saving.
 
 ---
 
 ## Available tools
 
+### Project management
+
+| Tool | Description |
+|---|---|
+| `list_projects` | Lists all `.scriv` packages in `SCRIV_DIR`. |
+| `open_project(name)` | Opens a project by name, making it active for all document tools. |
+| `create_project(name, ...)` | Creates a new project and opens it. See below. |
+
+### Document tools (require an open project)
+
 | Tool | Description |
 |---|---|
 | `list_documents` | Returns the full flattened binder with label and status names resolved. |
 | `get_document(uuid)` | Returns metadata and plain text content for a single document. |
-| `write_document(uuid, content)` | Writes new plain text content to a document (stored as RTF). |
+| `write_document(uuid, content)` | Writes new plain text content (stored as RTF). |
 | `update_metadata(uuid, changes)` | Updates title, synopsis, label, status, or compile inclusion. |
-| `search_documents(query)` | Full-text search across titles and synopses. |
+| `search_documents(query)` | Searches titles and synopses across the binder. |
+
+---
+
+## Creating a project
+
+`create_project` accepts a full binder structure so Claude can scaffold an entire project from an idea in one call.
+
+### Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `name` | string | Project name (becomes the `.scriv` package name). |
+| `labels` | array | Label definitions. Each is a string or `{name, color}`. Colors: `red`, `orange`, `yellow`, `green`, `blue`, `purple`, `pink`, `cyan`. |
+| `statuses` | array | Status names. Defaults to: To Do, In Progress, First Draft, Revised Draft, Done. |
+| `manuscript` | array | Binder items in the Draft (Manuscript) folder. |
+| `research` | array | Binder items in the Research folder. |
+
+### Binder item structure
+
+```json
+{
+  "title": "Chapter 1",
+  "type": "Folder",
+  "synopsis": "Alice finds the letter and confronts Bob.",
+  "content": "Optional initial body text (Text items only).",
+  "label": "POV: Alice",
+  "status": "To Do",
+  "includeInCompile": true,
+  "children": [...]
+}
+```
+
+- **`type`**: `"Folder"` for containers (acts, parts, chapters); `"Text"` for documents (scenes, notes). Defaults to `"Text"`.
+- **`synopsis`**: The virtual index card text — appears in Scrivener's corkboard and outliner views. Write a 1–3 sentence summary of what happens or what this item covers.
+- **`label`** and **`status`** must match names defined in the project's `labels` and `statuses` arrays.
+
+### Example
+
+```json
+{
+  "name": "My Novel",
+  "labels": [
+    { "name": "POV: Alice", "color": "blue" },
+    { "name": "POV: Bob", "color": "red" }
+  ],
+  "statuses": ["To Do", "First Draft", "Revised", "Done"],
+  "manuscript": [
+    {
+      "title": "Act One",
+      "type": "Folder",
+      "synopsis": "Alice discovers the conspiracy.",
+      "children": [
+        {
+          "title": "Chapter 1",
+          "type": "Folder",
+          "synopsis": "A normal Tuesday turns strange.",
+          "children": [
+            {
+              "title": "The Letter",
+              "type": "Text",
+              "synopsis": "Alice finds an unsigned letter in her mailbox.",
+              "label": "POV: Alice",
+              "status": "To Do"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "research": [
+    {
+      "title": "Characters",
+      "type": "Folder",
+      "children": [
+        {
+          "title": "Alice",
+          "type": "Text",
+          "synopsis": "Protagonist. Mid-30s journalist, sceptical but curious."
+        }
+      ]
+    }
+  ]
+}
+```
 
 ---
 
 ## Notes
 
-- **The server reads the `.scrivx` file on startup.** If you modify the project in Scrivener while the server is running, restart the server to pick up changes.
+- **Close Scrivener before writing.** `write_document` and `update_metadata` modify files directly. If Scrivener has the project open, it will overwrite changes on its next auto-save.
+- **Reload after editing in Scrivener.** Call `open_project` again to reload a project that was modified in Scrivener while the server was running.
 - `write_document` generates minimal RTF compatible with Scrivener 3 (cocoartf2761). Non-ASCII characters are Unicode-escaped.
-- `update_metadata` saves changes back to the `.scrivx` file immediately. Make sure Scrivener is closed before calling it, as Scrivener will overwrite the file when it saves.
-- Label and status IDs can be discovered via `list_documents` — the `labelId`/`statusId` fields contain the raw IDs and `label`/`status` contain the resolved names.
+- Label and status IDs are discoverable via `list_documents` — `labelId`/`statusId` are raw IDs, `label`/`status` are the resolved names.

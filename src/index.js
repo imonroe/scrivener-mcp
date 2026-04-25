@@ -1,3 +1,5 @@
+import { readdirSync } from 'fs';
+import { join } from 'path';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
@@ -6,27 +8,144 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { ScrivenerProject } from './scrivener.js';
 
-const scrivPath = process.env.SCRIV_PATH;
-if (!scrivPath) {
-  console.error('Error: SCRIV_PATH environment variable is required');
+const SCRIV_DIR = process.env.SCRIV_DIR ?? null;
+const SCRIV_PATH = process.env.SCRIV_PATH ?? null;
+
+if (!SCRIV_DIR && !SCRIV_PATH) {
+  console.error('Error: SCRIV_DIR or SCRIV_PATH environment variable is required');
   process.exit(1);
 }
 
-const project = new ScrivenerProject(scrivPath);
+let currentProject = SCRIV_PATH ? new ScrivenerProject(SCRIV_PATH) : null;
 
-const server = new Server(
-  { name: 'scrivener-mcp', version: '1.0.0' },
-  { capabilities: { tools: {} } }
-);
+function requireProject() {
+  if (!currentProject) {
+    throw new Error("No project open. Call list_projects to see what's available, then open_project.");
+  }
+  return currentProject;
+}
+
+function requireDir() {
+  if (!SCRIV_DIR) {
+    throw new Error('SCRIV_DIR is not configured. Set SCRIV_DIR to enable multi-project support.');
+  }
+  return SCRIV_DIR;
+}
+
+// ── Binder item schema (used inline in create_project) ───────────────────────
+
+const BINDER_ITEM_SCHEMA = {
+  type: 'object',
+  properties: {
+    title: { type: 'string' },
+    type: {
+      type: 'string',
+      enum: ['Text', 'Folder'],
+      description: 'Folder for containers (acts, parts, chapters); Text for documents (scenes, notes).',
+    },
+    synopsis: {
+      type: 'string',
+      description: "Index card text shown in Scrivener's corkboard view. Write a 1–3 sentence summary of what happens or what this item covers.",
+    },
+    content: {
+      type: 'string',
+      description: 'Initial plain-text body. Only used for Text items.',
+    },
+    label: {
+      type: 'string',
+      description: 'Label name — must match one of the labels defined for this project.',
+    },
+    status: {
+      type: 'string',
+      description: 'Status name — must match one of the statuses defined for this project.',
+    },
+    includeInCompile: {
+      type: 'boolean',
+      description: 'Whether to include in compile output. Defaults to true.',
+    },
+    children: {
+      type: 'array',
+      description: 'Nested binder items — scenes inside a chapter, chapters inside a part, etc.',
+      items: { type: 'object', description: 'Same structure as a binder item (recursive).' },
+    },
+  },
+  required: ['title'],
+};
+
+// ── Tool definitions ──────────────────────────────────────────────────────────
 
 const TOOLS = [
   {
-    name: 'list_documents',
-    description: 'Returns the flattened binder with label and status names resolved.',
+    name: 'list_projects',
+    description: 'Lists all Scrivener projects (.scriv packages) in the configured projects directory.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'open_project',
+    description: 'Opens a Scrivener project by name, making it the active project for all other tools.',
     inputSchema: {
       type: 'object',
-      properties: {},
+      properties: {
+        name: { type: 'string', description: 'Project name (with or without .scriv extension).' },
+      },
+      required: ['name'],
     },
+  },
+  {
+    name: 'create_project',
+    description: `Creates a new Scrivener project with full binder structure, labels, statuses, and optional initial content. The new project becomes the active project.
+
+Use this to scaffold a writing project from an idea: define the manuscript structure as a hierarchy of Folders (acts/parts/chapters) and Text items (scenes/documents), populate synopsis on every item (this is the virtual index card shown in Scrivener's corkboard), and optionally seed initial content. Define labels for categorisation (e.g. POV character, scene type, story thread) and statuses for workflow tracking.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: {
+          type: 'string',
+          description: 'Project name. Used as the .scriv package name.',
+        },
+        labels: {
+          type: 'array',
+          description: 'Label definitions for categorising documents (e.g. POV character, scene type, story thread). Each entry is a string name or {name, color} where color is one of: red, orange, yellow, green, blue, purple, pink, cyan.',
+          items: {
+            oneOf: [
+              { type: 'string' },
+              {
+                type: 'object',
+                properties: {
+                  name: { type: 'string' },
+                  color: {
+                    type: 'string',
+                    enum: ['red', 'orange', 'yellow', 'green', 'blue', 'purple', 'pink', 'cyan'],
+                  },
+                },
+                required: ['name'],
+              },
+            ],
+          },
+        },
+        statuses: {
+          type: 'array',
+          description: 'Status names for tracking document progress. Defaults to: To Do, In Progress, First Draft, Revised Draft, Done.',
+          items: { type: 'string' },
+        },
+        manuscript: {
+          type: 'array',
+          description: 'Top-level items in the Draft (Manuscript) folder. Structure these as the creative work itself — acts or parts containing chapters containing scenes.',
+          items: BINDER_ITEM_SCHEMA,
+        },
+        research: {
+          type: 'array',
+          description: 'Items in the Research folder. Use for world-building notes, character sheets, outlines, reference material.',
+          items: BINDER_ITEM_SCHEMA,
+        },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'list_documents',
+    description: 'Returns the flattened binder of the active project with label and status names resolved.',
+    inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'get_document',
@@ -75,7 +194,7 @@ const TOOLS = [
   },
   {
     name: 'search_documents',
-    description: 'Searches title and synopsis across all binder items.',
+    description: 'Searches title and synopsis across all binder items in the active project.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -86,6 +205,13 @@ const TOOLS = [
   },
 ];
 
+// ── Server ────────────────────────────────────────────────────────────────────
+
+const server = new Server(
+  { name: 'scrivener-mcp', version: '1.0.0' },
+  { capabilities: { tools: {} } }
+);
+
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
@@ -93,7 +219,47 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   try {
     switch (name) {
+
+      // ── Project management ──────────────────────────────────────────────
+
+      case 'list_projects': {
+        const dir = requireDir();
+        const entries = readdirSync(dir, { withFileTypes: true });
+        const projects = entries
+          .filter((e) => e.isDirectory() && e.name.endsWith('.scriv'))
+          .map((e) => e.name.replace(/\.scriv$/, ''));
+        return { content: [{ type: 'text', text: JSON.stringify(projects, null, 2) }] };
+      }
+
+      case 'open_project': {
+        const dir = requireDir();
+        const { name: projectName } = args;
+        const packageName = projectName.endsWith('.scriv') ? projectName : `${projectName}.scriv`;
+        currentProject = new ScrivenerProject(join(dir, packageName));
+        return { content: [{ type: 'text', text: `Opened project: ${projectName}` }] };
+      }
+
+      case 'create_project': {
+        const dir = requireDir();
+        const { name: projectName, labels, statuses, manuscript, research } = args;
+        currentProject = ScrivenerProject.create(dir, projectName, {
+          labels: labels ?? [],
+          statuses,
+          manuscript: manuscript ?? [],
+          research: research ?? [],
+        });
+        return {
+          content: [{
+            type: 'text',
+            text: `Created and opened project: ${projectName}\n\nCall list_documents to see the full binder structure.`,
+          }],
+        };
+      }
+
+      // ── Document tools ──────────────────────────────────────────────────
+
       case 'list_documents': {
+        const project = requireProject();
         const labels = project.getLabels();
         const statuses = project.getStatuses();
         const items = project.flattenBinder().map((item) => ({
@@ -105,37 +271,51 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'get_document': {
+        const project = requireProject();
         const { uuid } = args;
-        const item = project.findItem(uuid);
-        if (!item) throw new Error(`Document not found: ${uuid}`);
-
+        const flat = project.flattenBinder().find((i) => i.uuid === uuid);
+        if (!flat) throw new Error(`Document not found: ${uuid}`);
         const labels = project.getLabels();
         const statuses = project.getStatuses();
-        const flat = project.flattenBinder().find((i) => i.uuid === uuid) ?? {};
-        const content = project.readContent(uuid);
-
-        const result = {
-          ...flat,
-          label: labels[flat.labelId] ?? flat.labelId,
-          status: statuses[flat.statusId] ?? flat.statusId,
-          content,
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              ...flat,
+              label: labels[flat.labelId] ?? flat.labelId,
+              status: statuses[flat.statusId] ?? flat.statusId,
+              content: project.readContent(uuid),
+            }, null, 2),
+          }],
         };
-        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       }
 
       case 'write_document': {
+        const project = requireProject();
         const { uuid, content } = args;
         project.writeContent(uuid, content);
-        return { content: [{ type: 'text', text: `Content written for ${uuid}.\n\nReminder: if Scrivener has this project open, it will overwrite this change on its next auto-save. Close Scrivener before writing.` }] };
+        return {
+          content: [{
+            type: 'text',
+            text: `Content written for ${uuid}.\n\nReminder: if Scrivener has this project open, it will overwrite this change on its next auto-save. Close Scrivener before writing.`,
+          }],
+        };
       }
 
       case 'update_metadata': {
+        const project = requireProject();
         const { uuid, changes } = args;
         project.updateMetadata(uuid, changes);
-        return { content: [{ type: 'text', text: `Metadata updated for ${uuid}.\n\nReminder: if Scrivener has this project open, it will overwrite this change on its next auto-save. Close Scrivener before updating metadata.` }] };
+        return {
+          content: [{
+            type: 'text',
+            text: `Metadata updated for ${uuid}.\n\nReminder: if Scrivener has this project open, it will overwrite this change on its next auto-save. Close Scrivener before updating metadata.`,
+          }],
+        };
       }
 
       case 'search_documents': {
+        const project = requireProject();
         const { query } = args;
         const lower = query.toLowerCase();
         const results = project
