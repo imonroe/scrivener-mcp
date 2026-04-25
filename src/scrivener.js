@@ -3,17 +3,122 @@ import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { XMLParser, XMLBuilder } from 'fast-xml-parser';
 
+const RTF_DESTINATIONS = new Set([
+  'fonttbl', 'colortbl', 'stylesheet', 'info', 'filetbl',
+  'listtable', 'listoverridetable', 'revtbl', 'rsidtbl',
+  'themedata', 'latentstyles', 'datastore', 'generator',
+  'operator', 'author', 'title', 'subject', 'keywords',
+  'comment', 'doccomm', 'company', 'pict', 'shppict',
+  'nonshppict', 'object', 'objclass', 'objdata', 'result',
+  'falt', 'panose', 'fontemb', 'fontfile', 'xmlnstbl',
+  'wgrffmtfilter', 'protusertbl', 'header', 'footer',
+  'headerl', 'headerr', 'headerf', 'footerl', 'footerr',
+  'footerf', 'footnote', 'annotation', 'bkmkstart', 'bkmkend',
+  'field', 'fldinst', 'datafield', 'private', 'pntext',
+  'category',
+]);
+
+const RTF_SYMBOLS = {
+  par: '\n', line: '\n', sect: '\n', tab: '\t',
+  emdash: '\u2014', endash: '\u2013',
+  lquote: '\u2018', rquote: '\u2019',
+  ldblquote: '\u201C', rdblquote: '\u201D',
+  bullet: '\u2022',
+};
+
 function stripRtf(rtf) {
-  return rtf
-    .replace(/\{\\[^{}]*\}/g, '')
-    .replace(/\\par\b\*?/g, '\n')
-    .replace(/\\line\b\*?/g, '\n')
-    .replace(/\\tab\b/g, '\t')
-    .replace(/\\\n/g, '\n')
-    .replace(/\\u(\d+)\??/g, (_, code) => String.fromCharCode(parseInt(code, 10)))
-    .replace(/\\'([0-9a-fA-F]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
-    .replace(/\\[a-z*]+\d*\b\*?/g, '')
-    .replace(/[{}\\]/g, '')
+  let out = '';
+  let depth = 0;
+  let skipDepth = 0;
+  let i = 0;
+  const len = rtf.length;
+
+  while (i < len) {
+    const ch = rtf[i];
+
+    if (ch === '{') {
+      depth++;
+      let j = i + 1;
+      let isDestination = false;
+      if (rtf[j] === '\\' && rtf[j + 1] === '*') {
+        isDestination = true;
+      } else if (rtf[j] === '\\' && /[a-zA-Z]/.test(rtf[j + 1])) {
+        let k = j + 1;
+        let word = '';
+        while (k < len && /[a-zA-Z]/.test(rtf[k])) word += rtf[k++];
+        if (RTF_DESTINATIONS.has(word)) isDestination = true;
+      }
+      if (isDestination && skipDepth === 0) skipDepth = depth;
+      i++;
+      continue;
+    }
+
+    if (ch === '}') {
+      if (skipDepth > 0 && depth === skipDepth) skipDepth = 0;
+      depth--;
+      i++;
+      continue;
+    }
+
+    if (ch === '\\') {
+      const next = rtf[i + 1];
+      if (next === '\\' || next === '{' || next === '}') {
+        if (skipDepth === 0) out += next;
+        i += 2;
+        continue;
+      }
+      if (next === '\n' || next === '\r') {
+        if (skipDepth === 0) out += '\n';
+        i += 2;
+        continue;
+      }
+      if (next === "'") {
+        const hex = rtf.slice(i + 2, i + 4);
+        if (skipDepth === 0 && /^[0-9a-fA-F]{2}$/.test(hex)) {
+          out += String.fromCharCode(parseInt(hex, 16));
+        }
+        i += 4;
+        continue;
+      }
+      if (/[a-zA-Z]/.test(next)) {
+        let k = i + 1;
+        let word = '';
+        while (k < len && /[a-zA-Z]/.test(rtf[k])) word += rtf[k++];
+        let param = '';
+        if (rtf[k] === '-' || /\d/.test(rtf[k])) {
+          while (k < len && (rtf[k] === '-' || /\d/.test(rtf[k]))) param += rtf[k++];
+        }
+        if (rtf[k] === ' ') k++;
+
+        if (skipDepth === 0) {
+          if (word === 'u' && param) {
+            let code = parseInt(param, 10);
+            if (code < 0) code += 65536;
+            if (!isNaN(code)) out += String.fromCharCode(code);
+            if (rtf[k] === '?') k++;
+            else if (rtf[k] === '\\' && rtf[k + 1] === "'") k += 4;
+            else if (k < len && rtf[k] !== '\\' && rtf[k] !== '{' && rtf[k] !== '}') k++;
+          } else if (word in RTF_SYMBOLS) {
+            out += RTF_SYMBOLS[word];
+          }
+        }
+        i = k;
+        continue;
+      }
+      i += 2;
+      continue;
+    }
+
+    if (ch === '\n' || ch === '\r') {
+      i++;
+      continue;
+    }
+
+    if (skipDepth === 0) out += ch;
+    i++;
+  }
+
+  return out
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
