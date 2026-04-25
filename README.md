@@ -1,0 +1,2 @@
+# scrivener-mcp
+scrivener-mcp
