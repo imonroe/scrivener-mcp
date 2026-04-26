@@ -92,6 +92,9 @@ export class ScrivenerProject {
   _load() {
     const xml = readFileSync(this.scrivxPath, 'utf8');
     this._doc = new XMLParser(PARSER_OPTIONS).parse(xml);
+    // XMLParser stores the XML declaration as "?xml"; if we leave it in _doc,
+    // XMLBuilder will re-emit it and _save() would prepend a second one.
+    delete this._doc['?xml'];
   }
 
   reload() {
@@ -142,7 +145,10 @@ export class ScrivenerProject {
   }
 
   getStatuses() {
-    const statuses = this._doc?.ScrivenerProject?.StatusSettings?.Statuses?.Status ?? [];
+    const st = this._doc?.ScrivenerProject?.StatusSettings;
+    // Scrivener's native format uses StatusItems; our create() also writes StatusItems.
+    // Fall back to Statuses for any projects created by older versions of this code.
+    const statuses = st?.StatusItems?.Status ?? st?.Statuses?.Status ?? [];
     return Object.fromEntries(
       statuses.map((s) => [String(s['@_ID'] ?? ''), s['#text'] ?? String(s)])
     );
@@ -385,7 +391,7 @@ export class ScrivenerProject {
     const labelMap = Object.fromEntries(
       labels.map((l, i) => [typeof l === 'string' ? l : l.name, String(i + 1)])
     );
-    const statusMap = Object.fromEntries(statuses.map((s, i) => [s, String(i + 1)]));
+    const statusMap = Object.fromEntries(statuses.map((s, i) => [s, String(i)]));
 
     function buildItem(item) {
       const uuid = randomUUID().toUpperCase();
@@ -444,7 +450,7 @@ export class ScrivenerProject {
     ];
 
     const labelNodes = [
-      { '@_ID': '0', '#text': 'No Label' },
+      { '@_ID': '-1', '#text': 'No Label' },
       ...labels.map((l, i) => {
         const labelName = typeof l === 'string' ? l : l.name;
         const colorKey = typeof l === 'object' ? l.color : undefined;
@@ -454,8 +460,8 @@ export class ScrivenerProject {
     ];
 
     const statusNodes = [
-      { '@_ID': '0', '#text': 'No Status' },
-      ...statuses.map((s, i) => ({ '@_ID': String(i + 1), '#text': s })),
+      { '@_ID': '-1', '#text': 'No Status' },
+      ...statuses.map((s, i) => ({ '@_ID': String(i), '#text': s })),
     ];
 
     const doc = {
@@ -464,8 +470,8 @@ export class ScrivenerProject {
         '@_Creator': 'scrivener3',
         '@_Modified': now,
         Binder: { BinderItem: binderItems },
-        LabelSettings: { Labels: { Label: labelNodes } },
-        StatusSettings: { Statuses: { Status: statusNodes } },
+        LabelSettings: { DefaultLabelID: '-1', Labels: { Label: labelNodes } },
+        StatusSettings: { Title: 'Status', DefaultStatusID: '-1', StatusItems: { Status: statusNodes } },
       },
     };
 
