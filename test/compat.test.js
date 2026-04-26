@@ -80,12 +80,19 @@ function scrivenerRoundTrip(scrivPath, waitSecs = WAIT_SECS) {
     'end tell',
   ], { timeout: (waitSecs + 20) * 1000 });
 
-  // Step 2: Close by name with saving:no to suppress the save dialog
-  // (soft failure — auto-save already flushed data to disk)
+  // Step 2: Close by re-opening the path (focuses the existing window) then
+  // sending Cmd+W (soft failure — auto-save already flushed data to disk).
+  // Scrivener's `close document` AppleScript verb returns -1708 on all versions
+  // tested; the open+keystroke pattern is the only reliable alternative.
   try {
     runScript([
       'tell application "Scrivener"',
-      `    close document "${safeDoc}" saving no`,
+      '    activate',
+      `    open POSIX file "${safePath}"`,
+      '    delay 0.3',
+      'end tell',
+      'tell application "System Events"',
+      '    keystroke "w" using command down',
       'end tell',
     ], { timeout: 10000 });
   } catch {
@@ -95,14 +102,19 @@ function scrivenerRoundTrip(scrivPath, waitSecs = WAIT_SECS) {
   }
 }
 
-// Best-effort close of a named Scrivener document. Used in after() hooks so
+// Best-effort close of a Scrivener project by path. Used in after() hooks so
 // that even if the round-trip close failed mid-test, the window is cleaned up.
-function closeScrivenerDoc(docName) {
-  const safeDoc = docName.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+function closeScrivenerByPath(scrivPath) {
+  const safePath = scrivPath.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   const f = join(tmpdir(), `scriv-close-${Date.now()}.applescript`);
   writeFileSync(f, [
     'tell application "Scrivener"',
-    `    close document "${safeDoc}" saving no`,
+    '    activate',
+    `    open POSIX file "${safePath}"`,
+    '    delay 0.3',
+    'end tell',
+    'tell application "System Events"',
+    '    keystroke "w" using command down',
     'end tell',
   ].join('\n'), 'utf8');
   try {
@@ -269,7 +281,7 @@ describe('Scrivener round-trip compatibility', { skip: SKIP_REASON }, () => {
     });
 
     after(() => {
-      closeScrivenerDoc('MCP Compat — Creation');
+      closeScrivenerByPath(project.scrivPath);
       console.log(`  Phase 1 project left at: ${project.scrivPath}`);
     });
   });
@@ -390,9 +402,10 @@ describe('Scrivener round-trip compatibility', { skip: SKIP_REASON }, () => {
     });
 
     it('updateMetadata: includeInCompile=false survives round-trip', () => {
-      assert.equal(
-        project.findItem(uuids['Scene 1.1 — Opening Image']).MetaData.IncludeInCompile,
-        'No',
+      // Scrivener represents "excluded" as absent element (not 'No'), so check !== 'Yes'
+      assert.ok(
+        project.findItem(uuids['Scene 1.1 — Opening Image']).MetaData.IncludeInCompile !== 'Yes',
+        'Scene 1.1 should be excluded from compile after round-trip',
       );
     });
 
@@ -458,7 +471,7 @@ describe('Scrivener round-trip compatibility', { skip: SKIP_REASON }, () => {
     });
 
     after(() => {
-      closeScrivenerDoc('MCP Compat — Writes');
+      closeScrivenerByPath(project.scrivPath);
       console.log(`  Phase 2 project left at: ${project.scrivPath}`);
     });
   });
