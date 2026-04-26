@@ -99,9 +99,10 @@ Restart Claude Desktop after saving.
 
 | Tool | Description |
 |---|---|
-| `get_outline` | Returns the full binder as a nested tree with synopses, labels, and statuses. The best starting point for understanding and working on a project's structure. |
+| `get_outline(rootUuid?, includeContent?)` | Returns the binder as a nested tree with synopses, labels, and statuses. Pass `rootUuid` to scope to a subtree, and `includeContent: true` to inline prose directly into the tree (one call instead of many `get_document` calls). The best starting point for understanding and working on a project's structure. |
 | `list_documents` | Returns the binder as a flat list with depth indicators. Useful for getting UUIDs. |
 | `get_document(uuid)` | Returns metadata and plain text content for a single document. |
+| `get_documents(uuids)` | Batch version of `get_document` — returns metadata and content for many documents in a single call. |
 | `add_document(...)` | Adds a new document or folder to the binder. |
 | `move_document(uuid, newParentUuid)` | Moves a binder item to a different parent folder. |
 | `write_document(uuid, content)` | Writes new plain text content to a document (stored as RTF). |

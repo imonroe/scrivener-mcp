@@ -208,12 +208,41 @@ Use this to scaffold a writing project from an idea: define the manuscript struc
   },
   {
     name: 'get_outline',
-    description: `Returns the full binder as a nested tree with synopses, labels, and statuses — the single best tool for understanding a project's structure before suggesting or making changes.
+    description: `Returns the binder as a nested tree with synopses, labels, and statuses — the single best tool for understanding a project's structure before suggesting or making changes.
 
-Each node in the tree corresponds to a Scrivener index card. The synopsis is what appears on that card in the corkboard. Use this to see the story shape at a glance: which acts exist, how chapters are distributed, which scenes have synopses and which are blank, where structural gaps or imbalances are, and how labels and statuses are distributed across the manuscript.
+Each node corresponds to a Scrivener index card. The synopsis is what appears on the corkboard. Use this to see the story shape at a glance: which acts exist, how chapters are distributed, which scenes have synopses and which are blank, where structural gaps or imbalances are, and how labels and statuses are distributed.
 
-Call this before adding, moving, or proposing structural changes.`,
-    inputSchema: { type: 'object', properties: {} },
+Token-efficient context loading: pass includeContent=true to inline document text directly into the tree, collapsing what would otherwise be many separate get_document calls into one. To stay within reasonable context limits on large projects, scope to a subtree with rootUuid (e.g. one chapter or act) when you only need part of the manuscript.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        rootUuid: {
+          type: 'string',
+          description: 'UUID of a binder item to use as the root of the returned tree. Omit to return the full binder.',
+        },
+        includeContent: {
+          type: 'boolean',
+          description: 'If true, include the full plain-text content of every Text item in the tree (Folders never have content). Useful for loading prose context in a single call. Defaults to false.',
+        },
+      },
+    },
+  },
+  {
+    name: 'get_documents',
+    description: `Batch version of get_document. Returns metadata and plain text content for many documents in a single call.
+
+Use this when you need the prose for several specific documents (e.g. the previous three scenes for continuity, or every Text item with a particular label). Cheaper than calling get_document repeatedly. Items not found are returned with an "error" field rather than throwing.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        uuids: {
+          type: 'array',
+          description: 'UUIDs of documents to fetch. Order is preserved in the response.',
+          items: { type: 'string' },
+        },
+      },
+      required: ['uuids'],
+    },
   },
   {
     name: 'add_document',
@@ -394,7 +423,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'get_outline': {
         const project = requireProject();
-        return { content: [{ type: 'text', text: JSON.stringify(project.getOutline(), null, 2) }] };
+        const { rootUuid, includeContent } = args ?? {};
+        const outline = project.getOutline({ rootUuid, includeContent });
+        return { content: [{ type: 'text', text: JSON.stringify(outline, null, 2) }] };
+      }
+
+      case 'get_documents': {
+        const project = requireProject();
+        const { uuids } = args;
+        return { content: [{ type: 'text', text: JSON.stringify(project.getDocuments(uuids), null, 2) }] };
       }
 
       case 'add_document': {

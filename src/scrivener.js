@@ -379,26 +379,56 @@ export class ScrivenerProject {
 
   // ── Outline ──────────────────────────────────────────────────────────────────
 
-  _outlineItem(item, labels, statuses) {
+  _outlineItem(item, labels, statuses, includeContent) {
     const meta = item.MetaData ?? {};
+    const uuid = item['@_UUID'] ?? '';
+    const type = item['@_Type'] ?? '';
     const node = {
-      uuid: item['@_UUID'] ?? '',
-      type: item['@_Type'] ?? '',
+      uuid,
+      type,
       title: item.Title ?? '',
       synopsis: item.Synopsis ?? meta.Synopsis ?? '',
       label: labels[String(meta.LabelID ?? '')] ?? '',
       status: statuses[String(meta.StatusID ?? '')] ?? '',
       includeInCompile: meta.IncludeInCompile ?? '',
     };
+    if (includeContent && type === 'Text' && uuid) {
+      const text = this.readContent(uuid);
+      if (text) node.content = text;
+    }
     const children = item.Children?.BinderItem ?? [];
-    if (children.length) node.children = children.map((c) => this._outlineItem(c, labels, statuses));
+    if (children.length) {
+      node.children = children.map((c) => this._outlineItem(c, labels, statuses, includeContent));
+    }
     return node;
   }
 
-  getOutline() {
+  getOutline({ rootUuid = null, includeContent = false } = {}) {
     const labels = this.getLabels();
     const statuses = this.getStatuses();
-    return this._getBinderItems().map((item) => this._outlineItem(item, labels, statuses));
+    if (rootUuid) {
+      const item = this.findItem(rootUuid);
+      if (!item) throw new Error(`Item not found: ${rootUuid}`);
+      return [this._outlineItem(item, labels, statuses, includeContent)];
+    }
+    return this._getBinderItems().map((item) => this._outlineItem(item, labels, statuses, includeContent));
+  }
+
+  getDocuments(uuids) {
+    const labels = this.getLabels();
+    const statuses = this.getStatuses();
+    const flat = this.flattenBinder();
+    const byUuid = new Map(flat.map((i) => [i.uuid, i]));
+    return uuids.map((uuid) => {
+      const item = byUuid.get(uuid);
+      if (!item) return { uuid, error: 'not found' };
+      return {
+        ...item,
+        label: labels[item.labelId] ?? item.labelId,
+        status: statuses[item.statusId] ?? item.statusId,
+        content: item.type === 'Text' ? this.readContent(uuid) : '',
+      };
+    });
   }
 
   // ── Static factory ──────────────────────────────────────────────────────────
