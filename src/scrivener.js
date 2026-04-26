@@ -116,7 +116,7 @@ export class ScrivenerProject {
       type: item['@_Type'] ?? '',
       title: item.Title ?? '',
       depth,
-      synopsis: item.Synopsis ?? meta.Synopsis ?? '',
+      synopsis: this.readSynopsis(item['@_UUID'] ?? ''),
       labelId: String(meta.LabelID ?? ''),
       statusId: String(meta.StatusID ?? ''),
       includeInCompile: meta.IncludeInCompile ?? '',
@@ -176,13 +176,28 @@ export class ScrivenerProject {
     writeFileSync(join(dir, 'content.rtf'), buildRtf(plainText, this.platform), 'utf8');
   }
 
+  readSynopsis(uuid) {
+    const synopsisPath = join(this.scrivPath, 'Files', 'Data', uuid, 'synopsis.txt');
+    try {
+      return readFileSync(synopsisPath, 'utf8');
+    } catch {
+      return '';
+    }
+  }
+
+  writeSynopsis(uuid, text) {
+    const dir = join(this.scrivPath, 'Files', 'Data', uuid);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'synopsis.txt'), text, 'utf8');
+  }
+
   updateMetadata(uuid, changes) {
     const item = this.findItem(uuid);
     if (!item) throw new Error(`Item not found: ${uuid}`);
     if (!item.MetaData) item.MetaData = {};
 
     if ('title' in changes) item.Title = changes.title;
-    if ('synopsis' in changes) item.Synopsis = changes.synopsis;
+    if ('synopsis' in changes) this.writeSynopsis(uuid, changes.synopsis);
     if ('labelId' in changes) item.MetaData.LabelID = String(changes.labelId);
     if ('statusId' in changes) item.MetaData.StatusID = String(changes.statusId);
     if ('includeInCompile' in changes) {
@@ -245,8 +260,6 @@ export class ScrivenerProject {
       Title: itemDef.title ?? 'Untitled',
     };
 
-    if (itemDef.synopsis) node.Synopsis = itemDef.synopsis;
-
     const meta = {
       IncludeInCompile: itemDef.includeInCompile === false ? 'No' : 'Yes',
       Created: now,
@@ -260,6 +273,7 @@ export class ScrivenerProject {
     this._save();
 
     if (itemDef.content) this.writeContent(uuid, itemDef.content);
+    if (itemDef.synopsis) this.writeSynopsis(uuid, itemDef.synopsis);
 
     return uuid;
   }
@@ -280,7 +294,7 @@ export class ScrivenerProject {
       uuid: item['@_UUID'] ?? '',
       type: item['@_Type'] ?? '',
       title: item.Title ?? '',
-      synopsis: item.Synopsis ?? meta.Synopsis ?? '',
+      synopsis: this.readSynopsis(item['@_UUID'] ?? ''),
       label: labels[String(meta.LabelID ?? '')] ?? '',
       status: statuses[String(meta.StatusID ?? '')] ?? '',
       includeInCompile: meta.IncludeInCompile ?? '',
@@ -333,8 +347,6 @@ export class ScrivenerProject {
         Title: item.title ?? 'Untitled',
       };
 
-      if (item.synopsis) node.Synopsis = item.synopsis;
-
       const meta = {
         IncludeInCompile: item.includeInCompile === false ? 'No' : 'Yes',
         Created: now,
@@ -347,7 +359,7 @@ export class ScrivenerProject {
       const children = item.children ?? [];
       if (children.length > 0) node.Children = { BinderItem: children.map(buildItem) };
 
-      if (item.content) pendingContent.push({ uuid, content: item.content });
+      if (item.content || item.synopsis) pendingContent.push({ uuid, content: item.content, synopsis: item.synopsis });
 
       return node;
     }
@@ -413,8 +425,9 @@ export class ScrivenerProject {
     writeFileSync(join(scrivPath, `${safeName}.scrivx`), xml, 'utf8');
 
     const project = new ScrivenerProject(scrivPath, { platform });
-    for (const { uuid, content } of pendingContent) {
-      project.writeContent(uuid, content);
+    for (const { uuid, content, synopsis } of pendingContent) {
+      if (content) project.writeContent(uuid, content);
+      if (synopsis) project.writeSynopsis(uuid, synopsis);
     }
     return project;
   }
