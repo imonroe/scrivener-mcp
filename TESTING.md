@@ -39,7 +39,7 @@ Using `SCRIV_DIR` puts the test projects right alongside your real projects, so 
 
 The projects are overwritten on every run, so they always reflect the most recent test execution.
 
-> **Important:** Close Scrivener (or at least close any test projects) before running `npm test` or `npm run test:compat`. Scrivener's auto-save can overwrite changes mid-test. The compat suite opens projects in Scrivener itself as part of the test — let it finish before interacting with Scrivener.
+> **Important:** Close Scrivener (or at least close any test projects) before running `npm test` or `npm run test:compat`. Scrivener's auto-save can overwrite changes mid-test. The compat suite opens and closes its own projects automatically — let it finish before interacting with Scrivener. `npm test` leaves **MCP Test Suite** open for in-app verification; the two compat projects are closed when `test:compat` completes.
 
 ---
 
