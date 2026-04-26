@@ -140,23 +140,23 @@ export const TEST_PROJECT = {
 };
 
 // Expected label ID mapping created by ScrivenerProject.create()
-// '0' is always the built-in "No Label"; user-defined labels start at '1'.
+// '-1' is always the built-in "No Label"; user-defined labels start at '1'.
 export const LABEL_IDS = {
-  'No Label':       '0',
+  'No Label':       '-1',
   'Action':         '1',
   'Romance':        '2',
   'Character':      '3',
   'World-Building': '4',
 };
 
-// Expected status ID mapping. '0' is "No Status"; user-defined start at '1'.
+// Expected status ID mapping. '-1' is "No Status"; user-defined start at '0'.
 export const STATUS_IDS = {
-  'No Status':     '0',
-  'To Do':         '1',
-  'In Progress':   '2',
-  'First Draft':   '3',
-  'Revised Draft': '4',
-  'Done':          '5',
+  'No Status':     '-1',
+  'To Do':         '0',
+  'In Progress':   '1',
+  'First Draft':   '2',
+  'Revised Draft': '3',
+  'Done':          '4',
 };
 
 // Total binder items: Manuscript + 13 descendants = 14,

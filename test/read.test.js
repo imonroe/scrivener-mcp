@@ -31,9 +31,9 @@ describe('Read tests', () => {
   // ── Labels & Statuses ───────────────────────────────────────────────────────
 
   describe('getLabels()', () => {
-    it('returns the built-in No Label entry at ID 0', () => {
+    it('returns the built-in No Label entry at ID -1', () => {
       const labels = project.getLabels();
-      assert.equal(labels['0'], 'No Label');
+      assert.equal(labels['-1'], 'No Label');
     });
 
     it('returns all four custom labels in definition order', () => {
@@ -50,8 +50,8 @@ describe('Read tests', () => {
   });
 
   describe('getStatuses()', () => {
-    it('returns the built-in No Status entry at ID 0', () => {
-      assert.equal(project.getStatuses()['0'], 'No Status');
+    it('returns the built-in No Status entry at ID -1', () => {
+      assert.equal(project.getStatuses()['-1'], 'No Status');
     });
 
     it('returns all five custom statuses in definition order', () => {

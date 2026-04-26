@@ -385,7 +385,7 @@ export class ScrivenerProject {
     const labelMap = Object.fromEntries(
       labels.map((l, i) => [typeof l === 'string' ? l : l.name, String(i + 1)])
     );
-    const statusMap = Object.fromEntries(statuses.map((s, i) => [s, String(i + 1)]));
+    const statusMap = Object.fromEntries(statuses.map((s, i) => [s, String(i)]));
 
     function buildItem(item) {
       const uuid = randomUUID().toUpperCase();
@@ -444,7 +444,7 @@ export class ScrivenerProject {
     ];
 
     const labelNodes = [
-      { '@_ID': '0', '#text': 'No Label' },
+      { '@_ID': '-1', '#text': 'No Label' },
       ...labels.map((l, i) => {
         const labelName = typeof l === 'string' ? l : l.name;
         const colorKey = typeof l === 'object' ? l.color : undefined;
@@ -454,8 +454,8 @@ export class ScrivenerProject {
     ];
 
     const statusNodes = [
-      { '@_ID': '0', '#text': 'No Status' },
-      ...statuses.map((s, i) => ({ '@_ID': String(i + 1), '#text': s })),
+      { '@_ID': '-1', '#text': 'No Status' },
+      ...statuses.map((s, i) => ({ '@_ID': String(i), '#text': s })),
     ];
 
     const doc = {
@@ -464,8 +464,8 @@ export class ScrivenerProject {
         '@_Creator': 'scrivener3',
         '@_Modified': now,
         Binder: { BinderItem: binderItems },
-        LabelSettings: { Labels: { Label: labelNodes } },
-        StatusSettings: { Statuses: { Status: statusNodes } },
+        LabelSettings: { DefaultLabelID: '-1', Labels: { Label: labelNodes } },
+        StatusSettings: { DefaultStatusID: '-1', Statuses: { Status: statusNodes } },
       },
     };
 
