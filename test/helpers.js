@@ -1,14 +1,44 @@
-import { mkdirSync, rmSync, existsSync } from 'fs';
+import { mkdirSync, rmSync, existsSync, readFileSync } from 'fs';
 import { join, dirname } from 'path';
+import { homedir } from 'os';
 import { fileURLToPath } from 'url';
 import { ScrivenerProject } from '../src/scrivener.js';
 import { TEST_PROJECT } from './fixtures.js';
 
-// If SCRIV_DIR is configured (the same env var the MCP server uses), put test
-// projects there under a /test subfolder so Scrivener can find them alongside
-// real projects. Falls back to test/scratch/ when SCRIV_DIR is not set.
-export const SCRATCH_DIR = process.env.SCRIV_DIR
-  ? join(process.env.SCRIV_DIR, 'test')
+// Resolve SCRIV_DIR from (in priority order):
+//   1. SCRIV_DIR environment variable set in the shell
+//   2. The Claude Desktop config file — the same source Claude uses when
+//      launching the MCP server, so `npm test` and Claude see the same path
+//      without any manual duplication.
+function resolveScrivDir() {
+  if (process.env.SCRIV_DIR) return process.env.SCRIV_DIR;
+
+  const claudeConfigs = [
+    join(homedir(), 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json'),
+    join(process.env.APPDATA ?? '', 'Claude', 'claude_desktop_config.json'),
+  ];
+
+  for (const configPath of claudeConfigs) {
+    try {
+      const config = JSON.parse(readFileSync(configPath, 'utf8'));
+      for (const server of Object.values(config.mcpServers ?? {})) {
+        if (server.env?.SCRIV_DIR) return server.env.SCRIV_DIR;
+      }
+    } catch {
+      // config not present or unreadable — try next
+    }
+  }
+
+  return null;
+}
+
+const scrivDir = resolveScrivDir();
+
+// Put test projects in $SCRIV_DIR/test/ when a Scrivener directory is
+// configured, so they appear alongside real projects in Scrivener's browser.
+// Falls back to test/scratch/ (gitignored) when no config is found.
+export const SCRATCH_DIR = scrivDir
+  ? join(scrivDir, 'test')
   : join(dirname(fileURLToPath(import.meta.url)), 'scratch');
 
 // Creates (or recreates) a test project at SCRATCH_DIR/<name>.scriv.
