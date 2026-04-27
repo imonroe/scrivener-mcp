@@ -1,7 +1,82 @@
 import { readFileSync, writeFileSync, readdirSync, mkdirSync, existsSync } from 'fs';
-import { join } from 'path';
+import { join, basename } from 'path';
 import { randomUUID } from 'crypto';
+import { deflateRawSync } from 'zlib';
 import { XMLParser, XMLBuilder } from 'fast-xml-parser';
+
+const CRC32_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let j = 0; j < 8; j++) c = (c & 1) ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+    t[i] = c >>> 0;
+  }
+  return t;
+})();
+
+function crc32(buf) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < buf.length; i++) c = CRC32_TABLE[(c ^ buf[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+
+function zipSingleFile(filename, data) {
+  const nameBuf = Buffer.from(filename, 'utf8');
+  const compressed = deflateRawSync(data);
+  const crc = crc32(data);
+  const uncompSize = data.length;
+  const compSize = compressed.length;
+
+  const now = new Date();
+  const dosTime = ((now.getHours() & 0x1F) << 11) | ((now.getMinutes() & 0x3F) << 5) | ((now.getSeconds() >>> 1) & 0x1F);
+  const dosDate = (((now.getFullYear() - 1980) & 0x7F) << 9) | (((now.getMonth() + 1) & 0xF) << 5) | (now.getDate() & 0x1F);
+
+  const local = Buffer.alloc(30);
+  local.writeUInt32LE(0x04034b50, 0);
+  local.writeUInt16LE(20, 4);
+  local.writeUInt16LE(0, 6);
+  local.writeUInt16LE(8, 8);
+  local.writeUInt16LE(dosTime, 10);
+  local.writeUInt16LE(dosDate, 12);
+  local.writeUInt32LE(crc, 14);
+  local.writeUInt32LE(compSize, 18);
+  local.writeUInt32LE(uncompSize, 22);
+  local.writeUInt16LE(nameBuf.length, 26);
+  local.writeUInt16LE(0, 28);
+
+  const cd = Buffer.alloc(46);
+  cd.writeUInt32LE(0x02014b50, 0);
+  cd.writeUInt16LE(0x033F, 4);
+  cd.writeUInt16LE(20, 6);
+  cd.writeUInt16LE(0, 8);
+  cd.writeUInt16LE(8, 10);
+  cd.writeUInt16LE(dosTime, 12);
+  cd.writeUInt16LE(dosDate, 14);
+  cd.writeUInt32LE(crc, 16);
+  cd.writeUInt32LE(compSize, 20);
+  cd.writeUInt32LE(uncompSize, 24);
+  cd.writeUInt16LE(nameBuf.length, 28);
+  cd.writeUInt16LE(0, 30);
+  cd.writeUInt16LE(0, 32);
+  cd.writeUInt16LE(0, 34);
+  cd.writeUInt16LE(0, 36);
+  cd.writeUInt32LE(0, 38);
+  cd.writeUInt32LE(0, 42);
+
+  const cdSize = cd.length + nameBuf.length;
+  const cdOffset = local.length + nameBuf.length + compSize;
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(0, 4);
+  eocd.writeUInt16LE(0, 6);
+  eocd.writeUInt16LE(1, 8);
+  eocd.writeUInt16LE(1, 10);
+  eocd.writeUInt32LE(cdSize, 12);
+  eocd.writeUInt32LE(cdOffset, 16);
+  eocd.writeUInt16LE(0, 20);
+
+  return Buffer.concat([local, nameBuf, compressed, cd, nameBuf, eocd]);
+}
 
 const RTF_DESTINATIONS = new Set([
   'fonttbl', 'colortbl', 'stylesheet', 'info', 'filetbl',
@@ -211,6 +286,8 @@ export class ScrivenerProject {
   _assertWritable() {
     const lockPath = join(this.scrivPath, 'Files', 'user.lock');
     if (existsSync(lockPath)) {
+      const msg = `scrivener-mcp: refusing write — ${lockPath} is present (Scrivener has this project open)`;
+      console.error(msg);
       throw new Error(
         'Scrivener has this project open (Files/user.lock exists). ' +
         'Close the project in Scrivener and retry. ' +
@@ -222,7 +299,17 @@ export class ScrivenerProject {
   _save() {
     const xml = '<?xml version="1.0" encoding="UTF-8"?>\n' +
       new XMLBuilder(BUILDER_OPTIONS).build(this._doc);
-    writeFileSync(this.scrivxPath, xml, 'utf8');
+    const xmlBuf = Buffer.from(xml, 'utf8');
+    writeFileSync(this.scrivxPath, xmlBuf);
+    this._writeBinderAutosave(xmlBuf);
+  }
+
+  _writeBinderAutosave(xmlBuf) {
+    const filesDir = join(this.scrivPath, 'Files');
+    if (!existsSync(filesDir)) mkdirSync(filesDir, { recursive: true });
+    const autosavePath = join(filesDir, 'binder.autosave');
+    const innerName = basename(this.scrivxPath);
+    writeFileSync(autosavePath, zipSingleFile(innerName, xmlBuf));
   }
 
   _getBinderItems() {
@@ -604,7 +691,10 @@ export class ScrivenerProject {
 
     const xml = '<?xml version="1.0" encoding="UTF-8"?>\n' +
       new XMLBuilder(BUILDER_OPTIONS).build(doc);
-    writeFileSync(join(scrivPath, `${safeName}.scrivx`), xml, 'utf8');
+    const xmlBuf = Buffer.from(xml, 'utf8');
+    const scrivxName = `${safeName}.scrivx`;
+    writeFileSync(join(scrivPath, scrivxName), xmlBuf);
+    writeFileSync(join(scrivPath, 'Files', 'binder.autosave'), zipSingleFile(scrivxName, xmlBuf));
 
     const project = new ScrivenerProject(scrivPath, { platform });
     for (const { uuid, content } of pendingContent) {
